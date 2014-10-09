@@ -10,6 +10,9 @@
 #include <thread>
 #include <map>
 #include <list>
+#include <queue>
+
+#define INT uint64_t
 
 class MyThreadWrapper {
 public:
@@ -28,8 +31,46 @@ private:
   std::shared_ptr<std::thread> m_pThread;
 };
 
+class MsgQueue {
+public:
+  static MsgQueue* Instance() {
+    if (!m_pInstance)
+      m_pInstance = std::shared_ptr<MsgQueue>(new MsgQueue());
+    return m_pInstance.get();
+  }
+  
+  std::queue<std::string> m_MsgQueue;
+  std::mutex m_Mutex;
+  std::condition_variable m_Cond;
+  
+private:
+  MsgQueue() {};
+  
+  static std::shared_ptr<MsgQueue> m_pInstance;
+};
+
+std::shared_ptr<MsgQueue> MsgQueue::m_pInstance = nullptr;
+
 class PrimeCollector {
 public:
+  void Run() {
+    while (true) {
+      std::unique_lock<std::mutex> lk(MsgQueue::Instance()->m_Mutex);
+//      std::cout << "lock" << std::endl;
+
+      if (!MsgQueue::Instance()->m_MsgQueue.empty()) {
+        std::cout << "it's not empty!" << std::endl;
+        std::string s = MsgQueue::Instance()->m_MsgQueue.front();
+        std::cout << "s = " << s << std::endl;
+        MsgQueue::Instance()->m_MsgQueue.pop();
+        // handle_that_string(s);
+      } else {
+        MsgQueue::Instance()->m_Cond.wait(lk);
+//        std::cout << "waiting" << std::endl;
+      }
+    }
+  }
+  
   void Factorize(uint16_t number) {
     std::cout << "nubmer: " << number << std::endl;
     m_mPrimesPow.clear();
@@ -86,8 +127,8 @@ private:
     }
   }
 
-  std::map<uint64_t, uint64_t> m_mPrimesPow;
-  std::map<uint64_t, uint64_t> m_mPrimesMaxPow;
+  std::map<INT, INT> m_mPrimesPow;
+  std::map<INT, INT> m_mPrimesMaxPow;
 };
 
 int main(int argc, const char * argv[]) {
@@ -99,24 +140,35 @@ int main(int argc, const char * argv[]) {
   std::list<std::shared_ptr<MyThreadWrapper>> lThreads;
   std::list<std::shared_ptr<PrimeCollector>> lPrimesCollectors;
   
-  while (true) {
-    uint16_t number;
-    std::cin >> number;
-    if (number == 2)
-      break;
-    
+  for (int i = 0; i < threads_number; ++i) {
     std::shared_ptr<PrimeCollector> pPrimeCollector =
     std::shared_ptr<PrimeCollector>(new PrimeCollector());
     std::shared_ptr<MyThreadWrapper> pThread =
-    std::shared_ptr<MyThreadWrapper>(new MyThreadWrapper(
-        std::shared_ptr<std::thread>(new std::thread(&PrimeCollector::Factorize, pPrimeCollector, number))));
+    std::shared_ptr<MyThreadWrapper>(new MyThreadWrapper(std::shared_ptr<std::thread>(new std::thread(&PrimeCollector::Run, pPrimeCollector))));
     lPrimesCollectors.push_back(pPrimeCollector);
     lThreads.push_back(pThread);
   }
   
-
-//  t1.join();
-    std::cout << "ending..." << std::endl;
+  while (true) {
+    INT number;
+    std::cin >> number;
+    if (number == 2)
+      break;
+    
+    std::string msg = "asd";
+    {
+      std::unique_lock<std::mutex> lk(MsgQueue::Instance()->m_Mutex);
+      std::cout << "push msg" << std::endl;
+      MsgQueue::Instance()->m_MsgQueue.push(msg);
+    }
+    MsgQueue::Instance()->m_Cond.notify_one();
+  }
+  
+  std::cout << "ending..." << std::endl;
 
   return 0;
 }
+
+
+
+
