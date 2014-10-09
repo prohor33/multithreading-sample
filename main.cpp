@@ -16,66 +16,80 @@
 
 class MyThreadWrapper {
 public:
-  MyThreadWrapper(std::shared_ptr<std::thread> pThread)
-  : m_pThread(pThread) {
+  MyThreadWrapper(std::shared_ptr<std::thread> thread)
+  : thread_(thread) {
     
   }
   ~MyThreadWrapper() {
-    m_pThread->join();
+    thread_->join();
   }
   std::shared_ptr<std::thread> operator->() {
-    return m_pThread;
+    return thread_;
   }
   
 private:
-  std::shared_ptr<std::thread> m_pThread;
+  std::shared_ptr<std::thread> thread_;
+};
+
+struct Message {
+  enum MsgType {
+    DATA = 0,
+    NEED_RESULTS = 1
+  };
+  
+  Message(MsgType tmp_type, INT tmp_data = 0) :
+  type(tmp_type), data(tmp_data) {};
+  
+  MsgType type;
+  INT data;
 };
 
 class MsgQueue {
 public:
-  static MsgQueue* Instance() {
-    if (!m_pInstance)
-      m_pInstance = std::shared_ptr<MsgQueue>(new MsgQueue());
-    return m_pInstance.get();
+  static MsgQueue* instance() {
+    if (!instance_)
+      instance_ = std::shared_ptr<MsgQueue>(new MsgQueue());
+    return instance_.get();
   }
   
-  std::queue<std::string> m_MsgQueue;
-  std::mutex m_Mutex;
-  std::condition_variable m_Cond;
-  
+  std::queue<std::shared_ptr<Message>>& msg_queue() { return msg_queue_; };
+  std::mutex& mutex() { return mutex_; };
+  std::condition_variable& cond() { return cond_; };
 private:
   MsgQueue() {};
   
-  static std::shared_ptr<MsgQueue> m_pInstance;
+  static std::shared_ptr<MsgQueue> instance_;
+  std::queue<std::shared_ptr<Message>> msg_queue_;
+  std::mutex mutex_;
+  std::condition_variable cond_;
 };
 
-std::shared_ptr<MsgQueue> MsgQueue::m_pInstance = nullptr;
+std::shared_ptr<MsgQueue> MsgQueue::instance_ = nullptr;
 
 class PrimeCollector {
 public:
   void Run() {
     while (true) {
-      std::unique_lock<std::mutex> lk(MsgQueue::Instance()->m_Mutex);
+      std::unique_lock<std::mutex> lk(MsgQueue::instance()->mutex());
 //      std::cout << "lock" << std::endl;
 
-      if (!MsgQueue::Instance()->m_MsgQueue.empty()) {
+      if (!MsgQueue::instance()->msg_queue().empty()) {
         std::cout << "it's not empty!" << std::endl;
-        std::string s = MsgQueue::Instance()->m_MsgQueue.front();
-        std::cout << "s = " << s << std::endl;
-        MsgQueue::Instance()->m_MsgQueue.pop();
+        std::shared_ptr<Message> pMsg = MsgQueue::instance()->msg_queue().front();
+        MsgQueue::instance()->msg_queue().pop();
         // handle_that_string(s);
       } else {
-        MsgQueue::Instance()->m_Cond.wait(lk);
+        MsgQueue::instance()->cond().wait(lk);
 //        std::cout << "waiting" << std::endl;
       }
     }
   }
   
-  void Factorize(uint16_t number) {
+  void Factorize(INT number) {
     std::cout << "nubmer: " << number << std::endl;
-    m_mPrimesPow.clear();
+    primes_pow_.clear();
     
-    uint16_t z = 2;
+    INT z = 2;
     while (z * z <= number) {
       if (number % z == 0) {
 //        std::cout << z << std::endl;
@@ -96,14 +110,14 @@ public:
   
   void PrintTempResult() {
     std::cout << "temp result: ";
-    for (auto prime : m_mPrimesPow) {
+    for (auto prime : primes_pow_) {
       std::cout << prime.first << "^" << prime.second << ", ";
     }
     std::cout << std::endl;
   }
   void PrintResult() {
         std::cout << "result: ";
-    for (auto prime : m_mPrimesMaxPow) {
+    for (auto prime : primes_max_pow_) {
       std::cout << prime.first << "^" << prime.second << ", ";
     }
     std::cout << std::endl;
@@ -111,24 +125,24 @@ public:
   
 private:
   void AddPrime(uint16_t prime) {
-    if (m_mPrimesPow.find(prime) == m_mPrimesPow.end())
-      m_mPrimesPow[prime] = 0;
-    m_mPrimesPow[prime]++;
+    if (primes_pow_.find(prime) == primes_pow_.end())
+      primes_pow_[prime] = 0;
+    primes_pow_[prime]++;
   }
   
   void UpdateMaxPows() {
-    for (auto prime : m_mPrimesPow) {
-      if (m_mPrimesMaxPow.find(prime.first) == m_mPrimesMaxPow.end()) {
-        m_mPrimesMaxPow[prime.first] = prime.second;
+    for (auto prime : primes_pow_) {
+      if (primes_max_pow_.find(prime.first) == primes_max_pow_.end()) {
+        primes_max_pow_[prime.first] = prime.second;
         continue;
       }
-      if (prime.second > m_mPrimesMaxPow[prime.first])
-        m_mPrimesMaxPow[prime.first] = prime.second;
+      if (prime.second > primes_max_pow_[prime.first])
+        primes_max_pow_[prime.first] = prime.second;
     }
   }
 
-  std::map<INT, INT> m_mPrimesPow;
-  std::map<INT, INT> m_mPrimesMaxPow;
+  std::map<INT, INT> primes_pow_;
+  std::map<INT, INT> primes_max_pow_;
 };
 
 int main(int argc, const char * argv[]) {
@@ -137,16 +151,16 @@ int main(int argc, const char * argv[]) {
   
   std::cout << "hi" << std::endl;
   
-  std::list<std::shared_ptr<MyThreadWrapper>> lThreads;
-  std::list<std::shared_ptr<PrimeCollector>> lPrimesCollectors;
+  std::list<std::shared_ptr<MyThreadWrapper>> threads_list;
+  std::list<std::shared_ptr<PrimeCollector>> primes_collectors_list;
   
   for (int i = 0; i < threads_number; ++i) {
-    std::shared_ptr<PrimeCollector> pPrimeCollector =
+    std::shared_ptr<PrimeCollector> prime_collector =
     std::shared_ptr<PrimeCollector>(new PrimeCollector());
     std::shared_ptr<MyThreadWrapper> pThread =
-    std::shared_ptr<MyThreadWrapper>(new MyThreadWrapper(std::shared_ptr<std::thread>(new std::thread(&PrimeCollector::Run, pPrimeCollector))));
-    lPrimesCollectors.push_back(pPrimeCollector);
-    lThreads.push_back(pThread);
+    std::shared_ptr<MyThreadWrapper>(new MyThreadWrapper(std::shared_ptr<std::thread>(new std::thread(&PrimeCollector::Run, prime_collector))));
+    primes_collectors_list.push_back(prime_collector);
+    threads_list.push_back(pThread);
   }
   
   while (true) {
@@ -157,11 +171,11 @@ int main(int argc, const char * argv[]) {
     
     std::string msg = "asd";
     {
-      std::unique_lock<std::mutex> lk(MsgQueue::Instance()->m_Mutex);
+      std::unique_lock<std::mutex> lk(MsgQueue::instance()->mutex());
       std::cout << "push msg" << std::endl;
-      MsgQueue::Instance()->m_MsgQueue.push(msg);
+      MsgQueue::instance()->msg_queue().push(std::shared_ptr<Message>(new Message(Message::DATA, number)));
     }
-    MsgQueue::Instance()->m_Cond.notify_one();
+    MsgQueue::instance()->cond().notify_one();
   }
   
   std::cout << "ending..." << std::endl;
