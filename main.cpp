@@ -59,8 +59,11 @@ private:
 class Telegraph {
 public:
   static Telegraph* Instance() {
-    if (!instance_)
-      instance_ = std::shared_ptr<Telegraph>(new Telegraph());
+    {
+      std::lock_guard<std::mutex> lk(mutex_);
+      if (!instance_)
+        instance_ = std::shared_ptr<Telegraph>(new Telegraph());
+    }
     return instance_.get();
   }
   
@@ -77,11 +80,13 @@ private:
   msgs_to_main_(new MsgQueue()) {};
   
   static std::shared_ptr<Telegraph> instance_;
+  static std::mutex mutex_;
   std::shared_ptr<MsgQueue> msgs_to_workers_;
   std::shared_ptr<MsgQueue> msgs_to_main_;
 };
 
 std::shared_ptr<Telegraph> Telegraph::instance_ = nullptr;
+std::mutex Telegraph::mutex_;
 
 class PrimeCollector {
 public:
@@ -90,7 +95,6 @@ public:
       std::unique_lock<std::mutex> lk(Telegraph::Instance()->msgs_to_workers()->mutex());
 
       if (!Telegraph::Instance()->msgs_to_workers()->msg_queue().empty()) {
-        std::cout << "it's not empty!" << std::endl;
         std::shared_ptr<Message> pMsg = Telegraph::Instance()->msgs_to_workers()->msg_queue().front();
         
         if (pMsg->type == Message::DATA) {
@@ -102,14 +106,7 @@ public:
         
         Telegraph::Instance()->msgs_to_workers()->msg_queue().pop();
       } else {
-        if (!lk.owns_lock())
-          std::cout << "we are not owning the lock!" << std::endl;
-        try {
-          Telegraph::Instance()->msgs_to_workers()->cond().wait(lk);
-        } catch (std::system_error err) {
-          std::cout << "exception1: " << err.what() << std::endl;
-          return;
-        }
+        Telegraph::Instance()->msgs_to_workers()->cond().wait(lk);
       }
     }
   }
@@ -162,8 +159,8 @@ public:
     }
   }
   
-  const std::map<INT, INT>& primes_pow() const {
-    return primes_pow_;
+  const std::map<INT, INT>& primes_max_pow() const {
+    return primes_max_pow_;
   }
   
 private:
@@ -176,7 +173,7 @@ private:
   void NotifyMain(Message::MsgType msg_type) {
     {
       std::unique_lock<std::mutex> lk(Telegraph::Instance()->msgs_to_main()->mutex());
-      std::cout << "push notify msg" << std::endl;
+//      std::cout << "push notify msg" << std::endl;
       Telegraph::Instance()->msgs_to_main()->msg_queue().push(std::shared_ptr<Message>(new Message(msg_type)));
     }
     Telegraph::Instance()->msgs_to_main()->cond().notify_one();
@@ -188,9 +185,9 @@ private:
 
 int main(int argc, const char * argv[]) {
   
-  int threads_number = 20;  // TODO: ask user?
+  int threads_number = 4;  // TODO: ask user?
   
-  std::cout << "hi" << std::endl;
+  std::cout << "please enter your numbers: " << std::endl;
   
   std::list<std::shared_ptr<ThreadWrapper>> threads_list;
   std::list<std::shared_ptr<PrimeCollector>> primes_collectors_list;
@@ -204,12 +201,15 @@ int main(int argc, const char * argv[]) {
     threads_list.push_back(pThread);
   }
   
-  while (true) {
-    INT number;
-    std::cin >> number;
-    if (number == 2)
+  while (!std::cin.eof()) {
+    int64_t tmp;
+    std::cin >> tmp;
+    if (tmp < 1) {
+      std::cout << "bad input: " << tmp << " < 1" << std::endl;
       break;
-
+    }
+    INT number = static_cast<INT>(tmp);
+    
     {
       std::unique_lock<std::mutex> lk(Telegraph::Instance()->msgs_to_workers()->mutex());
       std::cout << "push data msg" << std::endl;
@@ -230,7 +230,6 @@ int main(int argc, const char * argv[]) {
     std::unique_lock<std::mutex> lk(Telegraph::Instance()->msgs_to_main()->mutex());
     
     if (!Telegraph::Instance()->msgs_to_main()->msg_queue().empty()) {
-      std::cout << "queue to main is not empty!" << std::endl;
       std::shared_ptr<Message> pMsg = Telegraph::Instance()->msgs_to_main()->msg_queue().front();
       if (pMsg->type == Message::FINISHED) {
         threads_terminated++;
@@ -244,7 +243,7 @@ int main(int argc, const char * argv[]) {
       Telegraph::Instance()->msgs_to_main()->cond().wait(lk);
     }
   }
-  
+
   std::cout << "merge results from different threads..." << std::endl;
 
   auto it_first = primes_collectors_list.begin();
@@ -255,7 +254,7 @@ int main(int argc, const char * argv[]) {
   auto it = primes_collectors_list.begin();
   it++;
   while (it != primes_collectors_list.end()) {
-    (*it_first)->MergeMaxPows((*it)->primes_pow());
+    (*it_first)->MergeMaxPows((*it)->primes_max_pow());
     ++it;
   }
   (*it_first)->PrintResult();
